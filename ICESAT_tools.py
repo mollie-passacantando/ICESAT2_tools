@@ -15,6 +15,7 @@ from dask.distributed import Client, progress
 from dask_jobqueue import SLURMCluster
 import netCDF4 as nc
 import math
+import numpy.ma as ma
 
 ## use parallel processing through dask to download ATL10 files
 def ATL10_download(start_date,end_date,target_directory): 
@@ -27,9 +28,9 @@ def ATL10_download(start_date,end_date,target_directory):
     cluster.adapt(maximum_jobs=20)
     client=Client(cluster)
     import modules.download_ATL10 as dl
-    start_date = '2019-06-01'
-    end_date = '2019-06-30'
-    target_directory = 'Chukchi_project'
+    start_date = '2019-05-01'
+    end_date = '2019-05-31'
+    target_directory = 'Chukchi_project/05'
     bounding_box = '-180,70,-150,76'
     url_list = dl.main(start_date,end_date,bounding_box)
     kwargs = {'target_directory':target_directory}
@@ -87,7 +88,7 @@ def get_surface(filename,**kwargs):
     if filename.endswith('h5') and filename.startswith("ATL03"):
 
         try:
-            f1 = h5py.File('/data/looselab/mollie/ATL03_data/'+target_directory+'/'+str(filename),'r') # open h5 files
+            f1 = h5py.File('/data/looselab/mollie/data/'+target_directory+'/'+str(filename),'r') # open h5 files
             print(filename)
             # pull out photon heights, distane along track, and segment length
             h_ph = f1[track+'/heights/h_ph'][:]
@@ -98,11 +99,17 @@ def get_surface(filename,**kwargs):
             deltime = f1[track+'/heights/delta_time'][:]
             bandheight = f1[track+'/bckgrd_atlas/tlm_top_band1'][:]
             deltimeband = f1[track+'/bckgrd_atlas/delta_time'][:]
+            h_ph = h_ph[np.logical_and(lats<=76,lats>=70)] # only
+            deltime = deltime[np.logical_and(lats<=76,lats>=70)]
+
 
             # correct the along track distance to account for total distance including segement length
             total_dist = sum(seglen)+dist[-1]
             photon_num = lons.shape[0]
             dist_corrected = np.arange(0,total_dist,total_dist/photon_num)
+            dist_corrected = dist_corrected[np.logical_and(lats<=76,lats>=70)]
+            lons = lons[np.logical_and(lats<=76,lats>=70)]
+            lats = lats[np.logical_and(lats<=76,lats>=70)]
 
 
             if kwargs['surface'] == 'ocean':
@@ -119,7 +126,7 @@ def get_surface(filename,**kwargs):
             deltime = deltime[surface_inds]
 
             # break up the data into the ocean sections (there will be space between the ocean sections)
-            coherent_sections = np.argwhere(np.diff(surface_inds)>1000000)
+            coherent_sections = np.argwhere(np.diff(surface_inds)>5000)
 
             if len(coherent_sections>0):
                 coherent_h = np.array_split(h_ph,np.squeeze(np.vstack([0,coherent_sections])).astype(int))
@@ -170,6 +177,8 @@ def get_rid_of_land_photons(heights,distances,bandheight,binsize,deltimeph,delti
     ##### input a full photon track and get out just the photons that are within some threshold 
     ##### will sort into horizontal bins, then 
     #
+    bandheight = bandheight[np.logical_and(deltimeband>=np.min(deltimeph),deltimeband<=np.max(deltimeph))] # need to get rid of extraneous points
+    deltimeband = deltimeband[np.logical_and(deltimeband>=np.min(deltimeph),deltimeband<=np.max(deltimeph))] # need to get rid of extraneous points
     band_inds = find_min_between_lists(deltimeband,deltimeph) # telemetry band goes by time, find where it intersects photons
     # you found the closest indices, now create bins to split the photons around
     #
@@ -189,19 +198,23 @@ def get_rid_of_land_photons(heights,distances,bandheight,binsize,deltimeph,delti
     total_band = np.concatenate(total_band)
     # now that each photon is labeled with the height, we can split it up based on our distance bins
     indices = np.arange(0,heights.shape[0])
-    bin_num = distances[-1]/binsize # for a bin of x meters, how many of our individual points will it take
+    bin_num = np.ptp(distances)/binsize # for a bin of x meters, how many of our individual points will it take
     #
-    split_bands = np.array_split(total_band,bin_num) # this is the bandheight for each photon, that we now re-bin along with our photon data to our binsize
-    split_inds = np.array_split(indices,bin_num)
-    split_heights = np.array_split(heights,bin_num) # total distance (distances[-1] over the number of points gives us the number of bins we need)
+    split_bands = np.array_split(total_band,int(bin_num)) # this is the bandheight for each photon, that we now re-bin along with our photon data to our binsize
+    split_inds = np.array_split(indices,int(bin_num))
+    split_heights = np.array_split(heights,int(bin_num)) # total distance (distances[-1] over the number of points gives us the number of bins we need)
+    split_times = np.array_split(deltimeph,int(bin_num))
     #
     # small_bands = [a for a,b in zip(split_bands,split_heights) if np.shape(np.argwhere(np.absolute(b)>60))[0]>1]
-    small_bands = [a[np.absolute(b)<60] for a,b in zip(split_bands,split_heights)]
-    small_inds = [a[np.absolute(b)<60] for a,b in zip(split_inds,split_heights)]
+    small_bands = [a[np.absolute(b)<100] for a,b in zip(split_bands,split_heights)]
+    small_inds = [a[np.absolute(b)<100] for a,b in zip(split_inds,split_heights)]
+    # small_bands = [a for a,b in zip(split_bands,split_heights) if np.argwhere(b>400).shape[0]<1]
+    # small_inds = [a for a,b in zip(split_inds,split_heights) if np.argwhere(b>400).shape[0]<1]
     #
     next_bands = [a for a in small_bands if a.shape[0]>0]
     next_inds = [a for a in small_inds if a.shape[0]>0]
     #
+    # good_inds = [a for a,b in zip(split_inds,split_bands) if np.mean(b)<30 ]
     good_inds = [a for a,b in zip(next_inds,next_bands) if np.mean(b)<30 ]
     final_inds = np.concatenate(good_inds)
     return final_inds
@@ -236,13 +249,11 @@ def get_only_land_photons(heights,distances,bandheight,binsize,deltimeph,deltime
 
 
 def get_thickness(filename,track = 'gt1r',**kwargs):
-
     target_directory = kwargs['target_directory']
     all_data = []
-    
     try:
         # fil = h5py.File('/data/looselab/mollie/ATL10_data/'+ATL10_target_dir+'/'+str(filename),'r') # open h5 files
-        f2 = nc.Dataset('/data/looselab/mollie/'+target_directory+'/'+str(filename)) # open h5 files
+        f2 = nc.Dataset('/data/looselab/mollie/data/'+target_directory+'/'+str(filename)) # open h5 files
         ilat = f2['latitude'][:]
         ilon = f2['longitude'][:]
         thick = f2['ice_thickness'][:]
@@ -250,8 +261,10 @@ def get_thickness(filename,track = 'gt1r',**kwargs):
         snow_dens = f2['snow_density'][:]
         snow_depth = f2['snow_depth'][:]
         fb = f2['freeboard'][:]
-        temp = np.datetime64('1980-01-06') +  deltime.astype('timedelta64[s]') - np.datetime64('2018-01-01')
-
+        vtimedelta = np.vectorize(timedelta)
+        temp = (datetime(1980,1,6) +  vtimedelta(seconds=ma.getdata(deltime)) - datetime(2018,1,1))
+        for count,time in enumerate(temp):
+            temp[count]=time.total_seconds()
         current_df = {'filename':filename,'time':temp,'thickness':thick,'snow_dens':snow_dens,'snow_depth':snow_depth,'freeboard':fb,'lat':ilat,'lon':ilon}
         all_data.append(current_df)
         dF = pd.DataFrame().append(all_data)
@@ -335,13 +348,15 @@ def match_ATL03_ATL10_file_num(ATL10_future,**kwargs):
         full_min_range = list_of_lists(ATL10_min_diffs) # thel and one for the end
         full_max_range = list_of_lists(ATL10_max_diffs)
         first_min = np.argmin(full_min_range)
-        if first_min < kwargs['time_constraint']:
+        if full_min_range[first_min] < kwargs['time_constraint']:
             min_ATL03_ind = np.trunc(first_min/2) # ta
         else:
             min_ATL03_ind = -99999
     else:
         min_ATL03_ind = -999
     return min_ATL03_ind
+
+
 
 def match_ATL03_ATL10_data(ATL03future,**kwargs):
     # given the data from one ATL10future, and the data from the matching ATL03future, give back a dataframe with all the relevant stuff:
@@ -384,7 +399,7 @@ def match_ATL03_ATL10_data(ATL03future,**kwargs):
             intarr = np.ones([ATL03height.shape[0]]) # a vector of ones that is the total number of ATL03 data points
             intarr1 = np.array_split(intarr,ATL03_bin_num) # split all the ATL03 ones into the number of bins we picked out
             intarr2 = [a*b for a,b in zip(multarr,intarr1)] # multiply each ATL03 bin by it's bin number - so we have n bins filled with some amount of entries that are all n
-            interp = NearestNDInterpolator(list(zip(ATL03lons,ATL03lats)),np.concatenate(intarr2)) 
+            interp = NearestNDInterpolator(list(zip(ATL03lons[0::1000],ATL03lats[0::1000])),np.concatenate(intarr2)[0::1000]) 
             print('starting interpolation')
             closest_ATL03 = interp(ATL10lons,ATL10lats) # evaluate the ATL10 points for the closest batch of ATL03, each ATL10 will be given an ATL03 bin number
             print('interpolation finished')
@@ -460,9 +475,10 @@ def twt(total_dataframe):
 
 
 def find_min_between_lists(query,base):
-    interval = base.shape[0]/query.shape[0] ## take the number of base points that go within a query
+    interval = base.shape[0]/(query.shape[0]) ## take the number of base points that go within a query
     minval = np.empty(query.shape[0])
     for count,val in enumerate(query):
+        count
         if (int(count*interval)-math.ceil(interval))<0:
             start=0
             end = int(count*interval)+2*math.ceil(interval)
@@ -470,18 +486,26 @@ def find_min_between_lists(query,base):
             var1 = var.argmin()
             minval[count] = var1+start
         elif (int(count*interval)+math.ceil(interval))>base.shape[0]:
-            start = int(count*interval)-2*math.ceil(interval)
-            end = base.shape[0]
+            print('special end case')
+            start = int(minval[count-1])
+            end = int(base.shape[0])
             var = np.absolute(base[start:end]-val)
             var1 = var.argmin()
             minval[count] = var1+start
         else:
-            start = int(count*interval)-math.ceil(interval)
-            end = int(count*interval)+math.ceil(interval)
+            start = int(minval[count-1])
+            end = int(start+2*math.ceil(interval))
             var = np.absolute(base[start:end]-val)
             var1 = var.argmin()
             minval[count] = var1+start
     return minval
+
+
+
+
+
+
+
 
 def avg_of_lists(list_of_arrays): # simple function to get the average of the list of arrays produced in both the futures
     import numpy as np
@@ -544,25 +568,28 @@ def get_ATL03_profiles(ATL03future,binsize):
     ##### will sort into horizontal bins, then 
     dF = pd.DataFrame()
     for index in np.arange(len(ATL03future)):
-        ATL03data = ATL03future.iloc[index]
+        ATL03data = ATL03future.iloc[index] # take one continuous transect of photon returns
         ATL03height = ATL03data['heights']
         ATL03dist = ATL03data['dist']
-        bin_num = np.ptp(ATL03dist)/binsize
-        if int(bin_num)==0:
+        ATL03time = ATL03data['time']
+        bin_num = np.ptp(ATL03dist)/binsize # split that transect into your binsize
+        if int(bin_num)==0: # if the transect is smaller than the binsize, take the whole transect
             split_heights = ATL03height
             split_dists = ATL03dist
+            split_times = ATL03time
         else:
             split_heights = np.array_split(ATL03height,int(bin_num)) 
             split_dists = np.array_split(ATL03dist,int(bin_num))
-        current_df = [{'dists':split_dists,'heights':split_heights}]
-        dF = dF.append(current_df)
+            split_times = np.array_split(ATL03time,int(bin_num))
+        current_df = [{'dists':split_dists,'heights':split_heights,'times':split_times}]
+        dF = dF.append(current_df) # returns a data frame with each continuous transect broken up into your binsize
     dF = dF.set_index([pd.Index(np.arange(len(dF)))])
     return dF
 
 
 
 
-def ATL03_deconvolve(h_norm,fzdata,fzdepth):
+def ATL03_deconvolve(Sm,vbins,tep_hist,tep_hist_time):
     from scipy import signal
     ## deconvolve signal
     # Fz = some response model
@@ -580,31 +607,88 @@ def ATL03_deconvolve(h_norm,fzdata,fzdepth):
     # hist,bin_edges = np.histogram(Sm,vbins*-1) # fit our signal to the same bins as the impulse function
     #
     # h_norm = (hist - np.amin(hist)) / np.ptp(hist) # normalize signal
-    fzdata=fzdata[h_norm>0]
-    fzdepth = fzdepth[1::][h_norm>0]
+
+    #############################
+    # [h1,bin_edges] = np.histogram(Sm,vbins) # bin h_ph into hbins and vbins
+
+    # h_norm1 = (h1-np.min(h1)) / np.ptp(h1)
+    # h_norm = h1/np.sum(h1) # this is the norm as defined in the ATL03 ATBD
+    tep_dist = -1*(299792458 * tep_hist_time)/2 # dist calculated from time, as in Lu (something)
+
+    # griddedfz = griddata(tep_dist,tep_hist,bin_edges[1::]) # put tep on same vertical scale
     #
-    h_norm=h_norm[h_norm>0]
-    starting_bin = np.argmax(h_norm)-250 # from Lu, we only want to include a smaller depth range, starting with our surface returtn
-    ending_bin = starting_bin + 250 # here i've picked 10 meters, so thats 200 .05 m bins
+    griddedfz=tep_hist
+
+    firstmax = np.argmax(griddedfz) # find first response
+
+    tempvar = np.zeros(griddedfz.shape[0])
+
+    interval_2m = 2/(np.absolute(np.diff(tep_dist[0:2])))
+
+    tempvar[0:firstmax-int(interval_2m)] = griddedfz[0:firstmax-int(interval_2m)] # to find second local max, get rid of first
+    tempvar[firstmax+int(interval_2m)::] = griddedfz[firstmax+int(interval_2m)::]
+
+    tep_surface = tep_dist[np.argmax(tempvar)]
+    fzdepth = tep_dist - tep_surface
+
+    # changing depths of tep data to adjust for the surface return
+    fzdata = tep_hist
+    # fzdepth = bin_edges-bin_edges[tep_surface[0][0]]
+
+    [h1,bin_edges] = np.histogram(Sm,np.flip(fzdepth)) # bin h_ph into hbins and vbins
+    h_norm = h1/np.sum(h1)
+    h_norm = np.flip(h_norm)
+
+    # putting tep data and measured signal over same range
+    # fzdata = fzdata[np.logical_and(fzdepth[1::]>=np.min(bin_edges[1::]),fzdepth[1::]<=np.max(bin_edges[1::]))]
+    # h_norm = h_norm[np.logical_and(bin_edges[1::]>=np.min(fzdepth[1::]),bin_edges[1::]<=np.max(fzdepth[1::]))]
+    # fzdepth = fzdepth[np.logical_and(fzdepth>=np.min(bin_edges),fzdepth<=np.max(bin_edges))]
+    # bin_edges = bin_edges[np.logical_and(bin_edges>=np.min(fzdepth),bin_edges<=np.max(fzdepth)+.002)]
+    # # get rid of zeros, so they don't mess up the logs
+    # fzdata=fzdata[h_norm>0]
+    # fzdepth = fzdepth[1::][h_norm>0]
+    # bin_edges = bin_edges[1::][h_norm>0]
+    # h_norm=h_norm[h_norm>0]
+
+    # bin_edges = bin_edges[~np.isnan(fzdata_var[1::])]
+    # fzdepth_var = fzdepth_var[~np.isnan(fzdata_var)]
+    # Bm = Bm[~np.isnan(fzdata_var[1::])]
+    # Bm = np.log(Bm)
+    # fzdata_var = fzdata_var[~np.isnan(fzdata_var)]
+    # fzdata_var = np.log(fzdata_var)
+    # fzdata_var[np.isnan(fzdata_var)] = np.nanmin(fzdata_var)
+    # #
+    # h_norm = np.log(h_norm)
+
+    starting_bin = np.argmax(h_norm)-100 # from Lu, we only want to include a smaller depth range, starting with our surface returtn
+    ending_bin = starting_bin + 1100 # here i've picked 10 meters, so thats 200 .05 m bins
     length = np.arange(starting_bin,ending_bin+1,1) # i just want something of the appropriate length to iterate over
-    Bm = h_norm[starting_bin:ending_bin+1]
+    # final versions of all our signals
+    Bm = h_norm[starting_bin:ending_bin+1] 
+    bin_edges = np.flip(bin_edges)
+    bin_edges = bin_edges[starting_bin:ending_bin+1]
     fzdata_var = fzdata[starting_bin:ending_bin+2]
     fzdepth_var = fzdepth[starting_bin:ending_bin+2]
-    #
-    fzdata_var = np.log(fzdata_var)
-    h_norm = np.log(h_norm)
+    # getting rid of all the nans
+    # length = length[~np.isnan(fzdata_var[1::])]
+    # length = length[1::]
+
+
     Fz_matrix = np.zeros([length.shape[0],length.shape[0]]) # minus one because we neglect the influence far from surface (lu)
     #
+    # fzdata_var[fzdata_var<-12.5] = Bm[fzdata_var<-12.5]
     for count,val in enumerate(length): ## REMAINING ISSUE: LAST ROW OF FZ IS IDENTICAL TO PREVIOUS ROWS
         count
         if count+1 == length.shape[0]:
-            Fz_matrix[count,0:count+1] = fzdata_var[int(length[count]+1-starting_bin):0:-1]
+            Fz_matrix[count,0:count+1] = fzdata_var[int(count+2):0:-1]
+        elif count+2 == length.shape[0]:
+            Fz_matrix[count,0:count+1] = fzdata_var[int(count+1):0:-1]
         else:
-            Fz_matrix[count,0:count+2] = fzdata_var[int(length[count]-starting_bin+1)::-1]
+            Fz_matrix[count,0:count+2] = fzdata_var[int(count+1)::-1]
     #
     #
     Bc = np.dot(np.linalg.inv(Fz_matrix).T,Bm)
-    return Bc,fzdepth_var
+    return Bc,fzdepth_var,bin_edges,fzdata,fzdepth,Bm
 
 
 
