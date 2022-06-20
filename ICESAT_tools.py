@@ -43,7 +43,7 @@ def ATL03_download(start_date,end_date,target_directory):
                             processes=1,
                             memory="250GB",
                             walltime="01:00:00",
-                            local_directory = '/data/looselab/mollie',
+                            local_directory = '',
                             queue="general")
     cluster.adapt(maximum_jobs=36,target_duration="10m")
 
@@ -88,7 +88,7 @@ def get_surface(filename,**kwargs):
     if filename.endswith('h5') and filename.startswith("ATL03"):
 
         try:
-            f1 = h5py.File('/data/looselab/mollie/data/'+target_directory+'/'+str(filename),'r') # open h5 files
+            f1 = h5py.File(''+target_directory+'/'+str(filename),'r') # open h5 files
             print(filename)
             # pull out photon heights, distane along track, and segment length
             h_ph = f1[track+'/heights/h_ph'][:]
@@ -252,8 +252,7 @@ def get_thickness(filename,track = 'gt1r',**kwargs):
     target_directory = kwargs['target_directory']
     all_data = []
     try:
-        # fil = h5py.File('/data/looselab/mollie/ATL10_data/'+ATL10_target_dir+'/'+str(filename),'r') # open h5 files
-        f2 = nc.Dataset('/data/looselab/mollie/data/'+target_directory+'/'+str(filename)) # open h5 files
+        f2 = nc.Dataset(''+target_directory+'/'+str(filename)) # open h5 files
         ilat = f2['latitude'][:]
         ilon = f2['longitude'][:]
         thick = f2['ice_thickness'][:]
